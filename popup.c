@@ -4,7 +4,6 @@
 #include <wayland-client-protocol.h>
 #include <wayland-client.h>
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
-#include <cairo/cairo.h>
 #include <wayland-egl.h>
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
@@ -125,15 +124,12 @@ static void draw_frame(void) {
     if (egl_surface == EGL_NO_SURFACE) {
         return;  // EGL 표면이 아직 생성되지 않았으면 그리기를 건너뜁니다.
     }
-
     glViewport(0, 0, width, height);
     glClearColor(1.0f, 0.0f, 0.0f, 1.0f);  // 빨간색
     glClear(GL_COLOR_BUFFER_BIT);
-
     eglSwapBuffers(egl_display, egl_surface);
-
-    //printf("Frame drawn\n");
 }
+
 
 int main(int argc, char **argv) {
 
