@@ -7,6 +7,7 @@
 #include <wayland-egl.h>
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
+
 static struct wl_display *display;
 static struct wl_compositor *compositor;
 static struct zwlr_layer_shell_v1 *layer_shell;
@@ -18,24 +19,30 @@ static EGLDisplay egl_display;
 static EGLContext egl_context;
 static EGLSurface egl_surface;
 static EGLConfig config;
+
 static void check_egl_error(const char *msg) {
-  EGLint error = eglGetError();
-  if (error != EGL_SUCCESS) {
-    fprintf(stderr, "%s: EGL error 0x%x\n", msg, error);
-    exit(1);
-  }
+    EGLint error = eglGetError();
+    if (error != EGL_SUCCESS) {
+        fprintf(stderr, "%s: EGL error 0x%x\n", msg, error);
+        exit(1);
+    }
 }
 
 static void init_egl(void) {
-  egl_display = eglGetDisplay((EGLNativeDisplayType)display);
-  check_egl_error("eglGetDisplay");
-    
-  if (!eglInitialize(egl_display, NULL, NULL)) {
-    check_egl_error("eglInitialize");
-  }
+    EGLint major, minor;
+    egl_display = eglGetDisplay((EGLNativeDisplayType)display);
+    if (egl_display == EGL_NO_DISPLAY) {
+        fprintf(stderr, "Can't create egl display\n");
+        exit(1);
+    }
 
-  EGLint n;
-  if (!eglChooseConfig(egl_display, (EGLint[]){
+    if (!eglInitialize(egl_display, &major, &minor)) {
+        fprintf(stderr, "Can't initialize egl display\n");
+        exit(1);
+    }
+
+    EGLint count;
+    EGLint config_attribs[] = {
         EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
         EGL_RED_SIZE, 8,
         EGL_GREEN_SIZE, 8,
@@ -43,18 +50,21 @@ static void init_egl(void) {
         EGL_ALPHA_SIZE, 8,
         EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
         EGL_NONE
-      }, &config, 1, &n)) {
-    check_egl_error("eglChooseConfig");
-  }
+    };
 
-  egl_context = eglCreateContext(egl_display, config, EGL_NO_CONTEXT, (EGLint[]){
-        EGL_CONTEXT_CLIENT_VERSION, 2,
-        EGL_NONE
-    });
-    check_egl_error("eglCreateContext");
+    if (!eglChooseConfig(egl_display, config_attribs, &config, 1, &count)) {
+        fprintf(stderr, "Cannot choose EGL config\n");
+        exit(1);
+    }
 
-    //printf("EGL initialized: display=%p, context=%p\n", (void*)egl_display, (void*)egl_context);
+    egl_context = eglCreateContext(egl_display, config, EGL_NO_CONTEXT, 
+                                   (EGLint[]){EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE});
+    if (egl_context == EGL_NO_CONTEXT) {
+        fprintf(stderr, "Cannot create EGL context\n");
+        exit(1);
+    }
 }
+
 static void create_egl_surface() {
     if (egl_surface != EGL_NO_SURFACE) {
         eglDestroySurface(egl_display, egl_surface);
@@ -69,7 +79,17 @@ static void create_egl_surface() {
         exit(1);
     }
 }
-static void draw_frame(void);
+
+static void draw_frame(void) {
+    if (egl_surface == EGL_NO_SURFACE) {
+        return;
+    }
+    glViewport(0, 0, width, height);
+    glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    eglSwapBuffers(egl_display, egl_surface);
+}
+
 static void layer_surface_configure(void *data,
                                     struct zwlr_layer_surface_v1 *layer_surface,
                                     uint32_t serial, uint32_t new_width, uint32_t new_height) {
@@ -86,13 +106,10 @@ static void layer_surface_configure(void *data,
     }
 
     draw_frame();
-
-    //printf("Layer surface configured: %dx%d\n", width, height);
 }
 
 static void layer_surface_closed(void *data,
         struct zwlr_layer_surface_v1 *layer_surface) {
-  //printf("Layer surface closed\n");
     exit(0);
 }
 
@@ -120,19 +137,26 @@ static const struct wl_registry_listener registry_listener = {
     .global_remove = registry_global_remove,
 };
 
-static void draw_frame(void) {
-    if (egl_surface == EGL_NO_SURFACE) {
-        return;  // EGL 표면이 아직 생성되지 않았으면 그리기를 건너뜁니다.
+static void cleanup(void) {
+    if (egl_display != EGL_NO_DISPLAY) {
+        eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        if (egl_context != EGL_NO_CONTEXT) {
+            eglDestroyContext(egl_display, egl_context);
+        }
+        if (egl_surface != EGL_NO_SURFACE) {
+            eglDestroySurface(egl_display, egl_surface);
+        }
+        eglTerminate(egl_display);
     }
-    glViewport(0, 0, width, height);
-    glClearColor(1.0f, 0.0f, 0.0f, 1.0f);  // 빨간색
-    glClear(GL_COLOR_BUFFER_BIT);
-    eglSwapBuffers(egl_display, egl_surface);
+    if (egl_window) wl_egl_window_destroy(egl_window);
+    if (layer_surface) zwlr_layer_surface_v1_destroy(layer_surface);
+    if (surface) wl_surface_destroy(surface);
+    if (layer_shell) zwlr_layer_shell_v1_destroy(layer_shell);
+    if (compositor) wl_compositor_destroy(compositor);
+    if (display) wl_display_disconnect(display);
 }
 
-
 int main(int argc, char **argv) {
-
     display = wl_display_connect(NULL);
     if (display == NULL) {
         fprintf(stderr, "Failed to connect to Wayland display\n");
@@ -147,6 +171,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Compositor or layer shell not available\n");
         return 1;
     }
+
     init_egl();
     surface = wl_compositor_create_surface(compositor);
     layer_surface = zwlr_layer_shell_v1_get_layer_surface(layer_shell,
@@ -158,11 +183,10 @@ int main(int argc, char **argv) {
 
     wl_surface_commit(surface);
 
-    //printf("Layer surface created and committed\n");
-
     while (wl_display_dispatch(display) != -1) {
-        // 이벤트 처리만 하고 draw_frame은 호출하지 않습니다.
+        draw_frame();
     }
 
+    cleanup();
     return 0;
 }
