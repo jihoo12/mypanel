@@ -1,1 +1,1 @@
-gcc -o popup popup.c wlr-layer-shell-unstable-v1-protocol.c xdg-shell-protocol.c -lwayland-client -lfcft -lpixman-1 -lm -lwayland-egl -lEGL -lGLESv2 -lwayland-cursor 
+gcc -o popup popup.c $(pkg-config --cflags --libs gtk4 gtk4-layer-shell)
