@@ -20,22 +20,28 @@ static struct wl_shm *shm = NULL;
 static struct wl_buffer *buffer = NULL;
 static uint32_t width = WIDTH, height = HEIGHT;
 
+// 에러 메시지를 출력하고 프로그램 종료
+static void handle_error(const char *msg) {
+    perror(msg);
+    exit(EXIT_FAILURE);
+}
+
+// 공유 메모리 파일 생성
 static int create_shared_memory_file(size_t size) {
     char template[] = "/tmp/wayland-shm-XXXXXX";
     int fd = mkstemp(template);
     if (fd < 0) {
-        perror("mkstemp");
-        return -1;
+        handle_error("mkstemp");
     }
     unlink(template);
     if (ftruncate(fd, size) < 0) {
-        perror("ftruncate");
         close(fd);
-        return -1;
+        handle_error("ftruncate");
     }
     return fd;
 }
 
+// 버퍼 생성
 static void create_buffer() {
     int stride = width * 4; // 4 bytes per pixel (RGBA)
     int size = stride * height;
@@ -48,9 +54,8 @@ static void create_buffer() {
 
     void *data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (data == MAP_FAILED) {
-        perror("mmap");
         close(fd);
-        exit(EXIT_FAILURE);
+        handle_error("mmap");
     }
 
     memset(data, 0xff, size); // Fill with white color
@@ -64,6 +69,7 @@ static void create_buffer() {
     close(fd);
 }
 
+// 레이어 표면 구성
 static void layer_surface_configure(void *data,
                                     struct zwlr_layer_surface_v1 *layer_surface,
                                     uint32_t serial, uint32_t new_width, uint32_t new_height) {
@@ -79,6 +85,7 @@ static void layer_surface_configure(void *data,
     wl_surface_commit(surface);
 }
 
+// 레이어 표면 닫힘 처리
 static void layer_surface_closed(void *data,
                                  struct zwlr_layer_surface_v1 *layer_surface) {
     fprintf(stderr, "Layer surface closed\n");
@@ -90,6 +97,7 @@ static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
     .closed = layer_surface_closed,
 };
 
+// 글로벌 객체 등록
 static void registry_global(void *data, struct wl_registry *registry,
                             uint32_t name, const char *interface, uint32_t version) {
     if (strcmp(interface, wl_compositor_interface.name) == 0) {
@@ -102,30 +110,43 @@ static void registry_global(void *data, struct wl_registry *registry,
 }
 
 static void registry_global_remove(void *data, struct wl_registry *registry,
-                                   uint32_t name) {
+                                   uint32_t name) {}
+
+// 리소스 해제
+static void cleanup() {
+   if (layer_surface)
+       zwlr_layer_surface_v1_destroy(layer_surface);
+
+   if (surface)
+       wl_surface_destroy(surface);
+
+   if (compositor)
+       wl_compositor_destroy(compositor);
+
+   if (shm)
+       wl_shm_destroy(shm);
+
+   if (display)
+       wl_display_disconnect(display);
 }
 
-static const struct wl_registry_listener registry_listener = {
-    .global = registry_global,
-    .global_remove = registry_global_remove,
-};
-
 int main(int argc, char **argv) {
-    display = wl_display_connect(NULL);
-    if (display == NULL) {
-        fprintf(stderr, "Failed to connect to Wayland display\n");
-        return EXIT_FAILURE;
-    }
+   display = wl_display_connect(NULL);
+   if (!display) {
+       fprintf(stderr, "Failed to connect to Wayland display\n");
+       return EXIT_FAILURE;
+   }
 
-    struct wl_registry *registry = wl_display_get_registry(display);
-    wl_registry_add_listener(registry, &registry_listener, NULL);
-    
+   struct wl_registry *registry = wl_display_get_registry(display);
+   wl_registry_add_listener(registry, &registry_listener, NULL);
+
    // 두 번의 라운드트립을 사용하여 모든 글로벌 객체가 준비되도록 함
    wl_display_roundtrip(display); 
    wl_display_roundtrip(display);
 
    if (!compositor || !layer_shell || !shm) {
        fprintf(stderr, "Compositor or layer shell or shm not available\n");
+       cleanup();
        return EXIT_FAILURE;
    }
 
@@ -153,21 +174,7 @@ int main(int argc, char **argv) {
        // Main loop
    }
 
-   // Cleanup
-   if (layer_surface)
-       zwlr_layer_surface_v1_destroy(layer_surface);
-
-   if (surface)
-       wl_surface_destroy(surface);
-
-   if (compositor)
-       wl_compositor_destroy(compositor);
-
-   if (shm)
-       wl_shm_destroy(shm);
-
-   if (display)
-       wl_display_disconnect(display);
-
+   cleanup();
+   
    return EXIT_SUCCESS;
 }
