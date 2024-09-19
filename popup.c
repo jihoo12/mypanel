@@ -8,23 +8,28 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-static struct wl_display *display;
-static struct wl_compositor *compositor;
-static struct zwlr_layer_shell_v1 *layer_shell;
-static struct wl_surface *surface;
-static struct zwlr_layer_surface_v1 *layer_surface;
-static struct wl_shm *shm;
-static struct wl_buffer *buffer;
-static uint32_t width = 256, height = 256;
+#define WIDTH 256
+#define HEIGHT 256
+
+static struct wl_display *display = NULL;
+static struct wl_compositor *compositor = NULL;
+static struct zwlr_layer_shell_v1 *layer_shell = NULL;
+static struct wl_surface *surface = NULL;
+static struct zwlr_layer_surface_v1 *layer_surface = NULL;
+static struct wl_shm *shm = NULL;
+static struct wl_buffer *buffer = NULL;
+static uint32_t width = WIDTH, height = HEIGHT;
 
 static int create_shared_memory_file(size_t size) {
     char template[] = "/tmp/wayland-shm-XXXXXX";
     int fd = mkstemp(template);
     if (fd < 0) {
+        perror("mkstemp");
         return -1;
     }
     unlink(template);
     if (ftruncate(fd, size) < 0) {
+        perror("ftruncate");
         close(fd);
         return -1;
     }
@@ -38,14 +43,14 @@ static void create_buffer() {
     int fd = create_shared_memory_file(size);
     if (fd < 0) {
         fprintf(stderr, "Failed to create shared memory file\n");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     void *data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (data == MAP_FAILED) {
-        fprintf(stderr, "Failed to mmap shared memory\n");
+        perror("mmap");
         close(fd);
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     memset(data, 0xff, size); // Fill with white color
@@ -68,7 +73,7 @@ static void layer_surface_configure(void *data,
     height = new_height > 0 ? new_height : height;
 
     create_buffer();
-    
+
     wl_surface_attach(surface, buffer, 0, 0);
     wl_surface_damage(surface, 0, 0, width, height);
     wl_surface_commit(surface);
@@ -76,7 +81,8 @@ static void layer_surface_configure(void *data,
 
 static void layer_surface_closed(void *data,
                                  struct zwlr_layer_surface_v1 *layer_surface) {
-    exit(0);
+    fprintf(stderr, "Layer surface closed\n");
+    exit(EXIT_SUCCESS);
 }
 
 static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
@@ -87,11 +93,11 @@ static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
 static void registry_global(void *data, struct wl_registry *registry,
                             uint32_t name, const char *interface, uint32_t version) {
     if (strcmp(interface, wl_compositor_interface.name) == 0) {
-        compositor = wl_registry_bind(registry, name, &wl_compositor_interface, 4);
+        compositor = wl_registry_bind(registry, name, &wl_compositor_interface, version > 4 ? 4 : version);
     } else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
-        layer_shell = wl_registry_bind(registry, name, &zwlr_layer_shell_v1_interface, 1);
+        layer_shell = wl_registry_bind(registry, name, &zwlr_layer_shell_v1_interface, version > 1 ? 1 : version);
     } else if (strcmp(interface, wl_shm_interface.name) == 0) {
-        shm = wl_registry_bind(registry, name, &wl_shm_interface, 1);
+        shm = wl_registry_bind(registry, name, &wl_shm_interface, version > 1 ? 1 : version);
     }
 }
 
@@ -108,42 +114,60 @@ int main(int argc, char **argv) {
     display = wl_display_connect(NULL);
     if (display == NULL) {
         fprintf(stderr, "Failed to connect to Wayland display\n");
-        return 1;
+        return EXIT_FAILURE;
     }
 
     struct wl_registry *registry = wl_display_get_registry(display);
     wl_registry_add_listener(registry, &registry_listener, NULL);
-    wl_display_roundtrip(display);
-
-    if (compositor == NULL || layer_shell == NULL || shm == NULL) {
-        fprintf(stderr, "Compositor or layer shell or shm not available\n");
-        return 1;
-    }
-
-    surface = wl_compositor_create_surface(compositor);
-    layer_surface = zwlr_layer_shell_v1_get_layer_surface(layer_shell,
-                                                          surface, NULL,
-                                                          ZWLR_LAYER_SHELL_V1_LAYER_TOP,
-                                                          "example");
-
-    zwlr_layer_surface_v1_set_size(layer_surface, width, height);
-    zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, -1);
-    zwlr_layer_surface_v1_add_listener(layer_surface,
-                                       &layer_surface_listener,
-                                       NULL);
-
-    create_buffer();
     
-    wl_surface_attach(surface, buffer, 0, 0);
-    wl_surface_damage(surface, 0, 0, width, height);
-    
-    wl_surface_commit(surface);
+   // 두 번의 라운드트립을 사용하여 모든 글로벌 객체가 준비되도록 함
+   wl_display_roundtrip(display); 
+   wl_display_roundtrip(display);
 
-    while (wl_display_dispatch(display) != -1) {
-        // Main loop
-    }
+   if (!compositor || !layer_shell || !shm) {
+       fprintf(stderr, "Compositor or layer shell or shm not available\n");
+       return EXIT_FAILURE;
+   }
 
-   // Cleanup code here...
+   surface = wl_compositor_create_surface(compositor);
+   layer_surface = zwlr_layer_shell_v1_get_layer_surface(layer_shell,
+                                                         surface,
+                                                         NULL,
+                                                         ZWLR_LAYER_SHELL_V1_LAYER_TOP,
+                                                         "example");
 
-   return 0;
+   zwlr_layer_surface_v1_set_size(layer_surface, width, height);
+   zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, -1);
+   zwlr_layer_surface_v1_add_listener(layer_surface,
+                                      &layer_surface_listener,
+                                      NULL);
+
+   create_buffer();
+
+   wl_surface_attach(surface, buffer, 0, 0);
+   wl_surface_damage(surface, 0, 0, width, height);
+
+   wl_surface_commit(surface);
+
+   while (wl_display_dispatch(display) != -1) {
+       // Main loop
+   }
+
+   // Cleanup
+   if (layer_surface)
+       zwlr_layer_surface_v1_destroy(layer_surface);
+
+   if (surface)
+       wl_surface_destroy(surface);
+
+   if (compositor)
+       wl_compositor_destroy(compositor);
+
+   if (shm)
+       wl_shm_destroy(shm);
+
+   if (display)
+       wl_display_disconnect(display);
+
+   return EXIT_SUCCESS;
 }
