@@ -19,12 +19,9 @@ static void activate (GtkApplication* app, void *_data) {
 
     // 윈도우를 화면 중앙에 배치
     gtk_window_set_gravity(gtk_window, GDK_GRAVITY_CENTER);
-
     GtkWidget *label = gtk_label_new ("");
-    gtk_label_set_markup (GTK_LABEL (label),
-                          "<span font_desc=\"20.0\">"
-                              "GTK Layer\nShell example!"
-                          "</span>");
+    gtk_label_set_text(GTK_LABEL(label),
+"Hello, World!");
     gtk_window_set_child (gtk_window, label);
     gtk_window_present (gtk_window);
 }
