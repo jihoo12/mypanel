@@ -1,3 +1,4 @@
 # mypanel
 hello
-depends gtk4-layer-shell 
+dependence  
+https://github.com/wmww/gtk4-layer-shell
